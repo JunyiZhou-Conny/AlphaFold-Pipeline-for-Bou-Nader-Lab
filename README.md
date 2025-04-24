@@ -1,166 +1,242 @@
-# AlphaFold-Pipeline-for-Bou-Nader-Lab
-# AlphaPulldown and AlphaFold3 Protein Interaction Workflow
+# AlphaPulldown + AlphaFold3 Research Log
 
-## Overview
-This README documents a complete pipeline for predicting protein–protein interactions (PPI) using AlphaPulldown (built on AlphaFold-Multimer) and AlphaFold3. It includes setup instructions, sequence preparation, feature extraction strategies (HHBlits, MMseqs2), parallelization strategies for large-scale prediction, and downstream analysis including PAE and structure visualization.
+This README documents the complete pipeline, setup, troubleshooting, and experimental execution history for running AlphaPulldown and AlphaFold3 workflows for protein complex structure prediction. All content is designed for reproducibility and future reference.
 
-The project was executed on a Linux HPC system with Conda-based environments and GPU-based parallel prediction.
+## Table of Contents
+- [TODO](#todo)
+- [Reference Links](#reference-links)
+- [File Transfer & Utilities](#file-transfer--utilities)
+- [Expected Data from AlphaFold3](#expected-data-from-alphafold3)
+- [AlphaPulldown Overview](#alphapulldown-overview)
+- [Environment Setup](#environment-setup)
+- [Feature Generation](#feature-generation)
+- [Understanding `create_individual_features.py`](#understanding-create_individual_featurespy)
+- [Accessing Databases](#accessing-databases)
+- [Multimer Job Execution](#multimer-job-execution)
+- [Result Analysis](#result-analysis)
+- [AlphaFold3 Notes](#alphafold3-notes)
+- [Troubleshooting & Exceptions](#troubleshooting--exceptions)
 
 ---
 
-## Resources and References
-- **UniProt Sequences:** https://www.uniprot.org
-- **AlphaPulldown:**
-  - Paper: https://academic.oup.com/bioinformatics/article/39/1/btac749/6839971
-  - Repo: https://github.com/KosinskiLab/AlphaPulldown
-- **AlphaFold2 Multimer:**
-  - https://github.com/google-deepmind/alphafold
-  - https://sbgrid.org/wiki/examples/alphafold2
-- **AlphaFold3:**
-  - https://github.com/google-deepmind/alphafold3
-  - Server: https://alphafoldserver.com/welcome
+## TODO
+1. Check `missing_proteins.txt` for Feature Database completeness.
+2. Investigate MMseqs2 errors and output inconsistencies.
 
-## 1. Environment Setup
-- Create Conda environment with required dependencies:
+---
+
+## Reference Links
+
+### UniProt
+- Protein sequences: https://www.uniprot.org
+- REST API example: https://www.uniprot.org/uniprotkb/Q04740/entry
+
+### AlphaPulldown
+- Paper: https://academic.oup.com/bioinformatics/article/39/1/btac749/6839971
+- GitHub: https://github.com/KosinskiLab/AlphaPulldown
+
+### AF2-Multimer
+- SBGrid example: https://sbgrid.org/wiki/examples/alphafold2
+- GitHub: https://github.com/google-deepmind/alphafold
+
+### AlphaFold3
+- Server: https://alphafoldserver.com/welcome
+- GitHub: https://github.com/google-deepmind/alphafold3
+
+---
+
+## File Transfer & Utilities
+
 ```bash
+# Transfer files (adjust paths as needed):
+scp /local/path/to/file jzho349@kilimanjaro.biochem.emory.edu:/remote/path
+scp -r jzho349@kilimanjaro.biochem.emory.edu:/remote/result/path ~/Downloads/
+
+# Split protein FASTA list into 8 chunks:
+split -n l/8 --suffix-length=2 --additional-suffix=.txt unique_protein_ids_Jack.txt target_chunk_Jack_
+```
+
+---
+
+## Expected Data from AlphaFold3
+1. **mmCIF**: Predicted complex structure.
+2. **pLDDT**: Per-residue confidence score.
+3. Possibly more outputs such as ipTM or pairwise confidence (to be explored).
+
+---
+
+## AlphaPulldown Overview
+AlphaPulldown consists of two core stages:
+
+1. [`create_individual_features.py`](https://github.com/KosinskiLab/AlphaPulldown#1-compute-multiple-sequence-alignment-msa-and-template-features-cpu-stage):
+   - Computes MSAs and finds templates.
+   - Stores monomer features as `.pkl` files.
+
+2. [`run_multimer_jobs.py`](https://github.com/KosinskiLab/AlphaPulldown#2-predict-structures-gpu-stage):
+   - Predicts structures based on the generated features.
+
+---
+
+## Environment Setup
+
+```bash
+# Create environment
 conda create -n AlphaPulldown -c omnia -c bioconda -c conda-forge \
   python==3.11 openmm==8.0 pdbfixer==1.9 kalign2 hhsuite hmmer modelcif
-source activate AlphaPulldown
-```
-- Install JAX for GPU acceleration:
-```bash
+
+# Activate & install JAX for GPU acceleration
+conda activate AlphaPulldown
 pip install -U "jax[cuda12]"
 ```
 
-## 2. Genetic Database Download (Required for feature extraction)
-Use AlphaFold-provided script:
-```bash
-bash download_all_data.sh /data7/Conny/alphafold_genetic_db
-```
-- Troubleshooting:
-  - `download_uniref30.sh` sometimes causes incompatibility with AlphaPulldown. Use updated versions: https://github.com/google-deepmind/alphafold/pull/860/files
+---
 
-## 3. Feature Extraction
-### Option A: HHBlits (slower)
+## Feature Generation
+
+### MMseqs2 (Sequential Mode)
 ```bash
-create_individual_features.py \
-  --fasta_paths=$FASTA_PATH \
-  --data_dir=$DATA_DIR \
-  --output_dir=$OUTPUT_DIR \
-  --use_mmseqs2=False \
-  --skip_existing=True \
-  --max_template_date=$MAX_TEMPLATE_DATE
+NUM_SEQ=$(grep -c "^>" protein_sequences.fasta)
+for ((i=0; i<$NUM_SEQ; i++)); do
+  echo "Processing index $i"
+  create_individual_features.py \
+    --fasta_paths=$FASTA_PATH \
+    --data_dir=$DATA_DIR \
+    --output_dir=$OUTPUT_DIR \
+    --skip_existing=True \
+    --use_mmseqs2=True \
+    --max_template_date="2050-01-01" \
+    --seq_index=$i || echo $i >> failed_indexes.txt
+
+done
 ```
 
-### Option B: MMseqs2 (faster)
-```bash
-create_individual_features.py \
-  --fasta_paths=$FASTA_PATH \
-  --data_dir=$DATA_DIR \
-  --output_dir=$OUTPUT_DIR \
-  --use_mmseqs2=True \
-  --skip_existing=True \
-  --max_template_date=$MAX_TEMPLATE_DATE
-```
-- If file errors (e.g., corrupted sequences like P40449, P23369) occur, remove them from input fasta.
-
-## 4. Parallelized Feature Extraction (JackHMMer or MMseqs2)
+### JackHMMer (Parallelized)
 ```bash
 MAX_JOBS=16
+rm -f $FAILED_LOG
+
 for ((i=0; i<$NUM_SEQ; i++)); do
   (
     create_individual_features.py \
-      --seq_index=$i \
-      ... # same args as above
+      --fasta_paths=$FASTA_PATH \
+      --data_dir=$DATA_DIR \
+      --output_dir=$OUTPUT_DIR \
+      --skip_existing=True \
+      --use_mmseqs2=False \
+      --max_template_date="2050-01-01" \
+      --seq_index=$i || echo $i >> $FAILED_LOG
   ) &
+
   while (( $(jobs -r | wc -l) >= MAX_JOBS )); do sleep 1; done
-done
-wait
-```
-- Controls job concurrency to avoid I/O bottlenecks.
 
-## 5. Using Feature Pickle Database
-- Use `check_download_feature_db.py` to check which proteins already exist in EMBL's pickle repo
-- Use `mc` (MinIO Client) to download:
-```bash
-mc cp embl/alphapulldown/input_features/ORG/PROTEIN.pkl.xz /data7/Conny/data/FeaturePickleDB/
-xz -dk *.xz  # Decompress while keeping originals
-```
-
-## 6. Running Multimer Prediction (Pulldown Mode)
-### Single GPU or Small Batch
-```bash
-run_multimer_jobs.py \
-  --mode=pulldown \
-  --monomer_objects_dir=... \
-  --protein_lists=bait.txt,target.txt \
-  --output_path=... \
-  --data_dir=... \
-  --num_cycle=3 --num_predictions_per_model=1
-```
-
-### Parallel (8 GPUs)
-```bash
-for TARGET_FILE in chunk_aa chunk_ab ...; do
-  GPU_ID=... # set per file
-  CUDA_VISIBLE_DEVICES=$GPU_ID run_multimer_jobs.py ... &
 done
 wait
 ```
 
-## 7. AlphaFold3: Advanced Prediction and Visualization
-- Run AF3 locally for MSA feature support: https://github.com/google-deepmind/alphafold3/blob/main/docs/input.md
-- Server GUI only supports sequence input
-- AF3 Output Files (per complex):
-  - `ranked_*.pdb`, `*_PAE_plot.png`, `confidence_model.json`, `timings.json`, etc.
+---
 
-## 8. Postprocessing and Notebook Generation
+## Understanding `create_individual_features.py`
+- CPU-only script
+- Output format: Pickle files (`.pkl`)
+- Requires pre-downloaded **Genetic Database**
+- Feature sources:
+  1. JackHMMer/HHblits (default)
+  2. MMseqs2
+  3. Precomputed Feature Pickles
+
+### Resources
+- Genetic DB: https://github.com/KosinskiLab/alphafold#genetic-databases
+- Feature DB: https://alphapulldown.s3.embl.de/index.html
+
+---
+
+## Accessing Databases
+
+### Genetic Database
 ```bash
-create_notebook.py --cutoff=5.0 --output_dir=/data7/Conny/result_mmseqs2/pulldown_results/gpu_0
-jupyter-lab output.ipynb
+bash download_all_data.sh /data7/Conny/data/AF_GeneticDB
 ```
 
-## 9. Fold Analysis (Apptainer Sandbox)
-- Install Apptainer:
+### Feature Pickle Database
 ```bash
-wget ...
-./mconfig --prefix=$HOME/opt/apptainer
-make -j 4 && make install
+# Install MinIO
+curl -O https://dl.min.io/client/mc/release/linux-amd64/mc
+chmod +x mc && mkdir -p $HOME/bin && mv mc $HOME/bin/
+echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc && source ~/.bashrc
+
+# Example download
+mc cp embl/alphapulldown/input_features/Saccharomyces_cerevisiae/Q01329.pkl.xz /data7/Conny/data/JackFeaturePickleDB
+
+# Batch download
+bash download_found.sh | tee download_output.log
+xz -dk *.xz  # decompress while keeping original
 ```
-- Add CCP4 binaries and run:
+
+---
+
+## Multimer Job Execution
+
+Parallel execution across 8 GPUs:
 ```bash
-apptainer exec --bind /data:/mnt fold_analysis_final.sif run_get_good_pae.sh --output_dir=/mnt --cutoff=10
+TARGET_FILES=(
+  /data7/Conny/data/target_chunk_aa
+  /data7/Conny/data/target_chunk_ab
+  ...
+  /data7/Conny/data/target_chunk_ah
+)
+
+for i in ${!TARGET_FILES[@]}; do
+  CUDA_VISIBLE_DEVICES=$i run_multimer_jobs.py \
+    --mode=pulldown \
+    --monomer_objects_dir=$MONOMER_OBJECTS_DIR \
+    --protein_lists=$(realpath $BAIT_FILE),${TARGET_FILES[$i]} \
+    --output_path=$BASE_OUTPUT/gpu_$i \
+    --data_dir=$DATA_DIR \
+    --num_cycle=3 \
+    --num_predictions_per_model=1 \
+    > $BASE_OUTPUT/gpu_$i/run.log 2>&1 &
+done
+
+wait
 ```
-- Must install `squashfuse` or use sandbox extraction mode
 
 ---
 
-## Timeline (Simplified Log)
-- **March 24:** Setup MMseqs2 pipeline, identified failing sequences
-- **March 25–29:** Parallelized feature extraction across 16 CPUs, managed I/O bottlenecks
-- **April 1–3:** Ran multimer jobs on 8 GPUs, analyzed failures, mapped proteins to GPU logs
-- **April 6–10:** Filtered broken chains, improved parallel reruns
-- **April 12:** Built sandbox Apptainer image for visualization (fold_analysis_final.sif)
-- **April 14:** Began visualization metrics on ipTM, pTM, using Jupyter Notebooks
+## Result Analysis
+
+1. Create Jupyter notebooks using:
+```bash
+create_notebook.py --cutoff=5.0 --output_dir=/path/to/results
+```
+
+2. Visualize outputs (e.g., PAE, ipTM, ranked pdbs)
+3. For full table generation:
+   - Build `apptainer` image with CCP4 libraries
+   - Execute:
+```bash
+apptainer exec --no-home --bind /results:/mnt fold_analysis_final.sif /app/run_get_good_pae.sh --output_dir=/mnt --cutoff=10
+```
 
 ---
 
-## Retrospective Notes
-- Parallelism at controlled job slots (not all 1700 at once) greatly reduced system crashes
-- MMseqs2 is substantially faster but may silently fail for rare sequences
-- Maintaining a `failed_indexes.txt` log and trimming input fasta is essential for rerun stability
-- Relying on feature pickle DB (via EMBL MinIO) can skip ~50% of precomputation if used wisely
-- AF3 shows promise but has limited flexibility unless run locally with MSA input support
+## AlphaFold3 Notes
+- GUI: Automated MSA
+- Local mode: Accepts MSA input via JSON
+- Additional work needed to automate Selenium upload process (autoclicker test in progress)
 
 ---
 
-## Future Improvements
-- Automate the rerun of failed sequences based on `failed_indexes.txt`
-- Build dynamic combination generation based on completed results
-- Create dashboard summary of pTM/ipTM vs bait–target combinations for ranking
-- Develop file consistency checker post-run to catch incomplete output early
+## Troubleshooting & Exceptions
+
+1. **UniRef30 issue** → Fix with: https://github.com/google-deepmind/alphafold/pull/860/files
+2. **Failed proteins** (resolved):
+   - P40449, P23369, Q12754
+3. **MMseqs2 output:**
+   - 7438 processed, 3684 available in FeaturePickleDB
+4. **GPU stalls:** traced to missing entries in target lists (e.g., Q12019)
+5. **JackHMMer:** 3 known failures → P40328, P48570, P32432
 
 ---
 
-_End of Readme._
+This document is actively maintained as experimental runs progress.
 
