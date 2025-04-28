@@ -54,6 +54,9 @@ scp -r jzho349@kilimanjaro.biochem.emory.edu:/remote/result/path ~/Downloads/
 
 # Split protein FASTA list into 8 chunks:
 split -n l/8 --suffix-length=2 --additional-suffix=.txt unique_protein_ids_Jack.txt target_chunk_Jack_
+
+# One-liner tracing number of jobs completed
+for d in gpu_*; do echo "$d: $(ls -1 "$d" | wc -l)"; done
 ```
 
 ---
