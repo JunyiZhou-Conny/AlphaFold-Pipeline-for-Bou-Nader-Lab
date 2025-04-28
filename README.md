@@ -233,7 +233,7 @@ apptainer exec --no-home --bind /results:/mnt fold_analysis_final.sif /app/run_g
 
 1. **UniRef30 issue** → Fix with: https://github.com/google-deepmind/alphafold/pull/860/files
 2. **MMseqs2:** 5 failures → P40449, P23369, Q12754, Q22354, Q12019
-3. **JackHMMer:** 3 known failures → P40328, P48570, P32432
+3. **JackHMMer:** 3 known failures → P40328, P48570, P32432，P38691，P48510，P53920，Q00582 → cd /data7/Conny/result_JackHMMer/missing_pkls.txt 
 4. **FeatureDB:** 20 missing pickles → cd /data7/Conny/data/JackFeaturePickleDB/missing_pickle_proteins.txt
 5. **AF3:** 1 missing pickles due to large size → Job_999
 
